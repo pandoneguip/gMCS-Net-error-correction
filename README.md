@@ -39,7 +39,7 @@ clusterProfiler, pheatmap
 
 ## Referencia
 
-Trabajo de Fin de Grado — Ingeniería Biomédica  
+Proyecto de Fin de Grado — Ingeniería Biomédica  
 Autor: Pablo Andonegui  
-Tecnun — Universidad de Navarra, 2025  
-Directores: Iñigo Apaolaza, Francisco J. Planes
+Tecnun — Universidad de Navarra, 2026  
+
