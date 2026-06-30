@@ -292,16 +292,29 @@ col_effects <- sort(abs(mp_train$col), decreasing = TRUE)
 cat("\nTop 10 genes con mayor sesgo sistemático:\n")
 print(head(col_effects, 10))
 
-# Histograma de efectos por cell line
-par(mfrow = c(1, 2))
-hist(mp_train$row, breaks = 31, col = "steelblue",
-     main = "Sesgo sistemático por cell line",
-     xlab = "Efecto row (median polish)")
-hist(mp_train$col, breaks = 30, col = "salmon",
-     main = "Sesgo sistemático por gen",
-     xlab = "Efecto col (median polish)")
-par(mfrow = c(1, 1))
+library(ggplot2)
+library(patchwork)
 
+p1 <- ggplot(data.frame(x = mp_train$row), aes(x = x)) +
+  geom_histogram(bins = 30, fill = "steelblue", color = "white") +
+  labs(title = "Sesgo sistemático por línea celular",
+       x = "Efecto fila (Median Polish)", y = "Frecuencia") +
+  theme_minimal(base_size = 11)
+
+p2 <- ggplot(data.frame(x = mp_train$col), aes(x = x)) +
+  geom_histogram(bins = 30, fill = "salmon", color = "white") +
+  labs(title = "Sesgo sistemático por gen",
+       x = "Efecto columna (Median Polish)", y = "Frecuencia") +
+  theme_minimal(base_size = 11)
+
+figura <- p1 + p2
+
+ggsave("figura_median_polish_sesgos.png",
+       plot   = figura,
+       width  = 10,
+       height = 4,
+       dpi    = 300,
+       bg     = "white")
 # ----------------------------------------------------------
 # El residuo es la matriz que usaremos para la deflación
 # ----------------------------------------------------------
@@ -367,7 +380,7 @@ plot_df$gene <- factor(plot_df$gene,
                        levels = plot_df$gene[order(plot_df$weight)])
 
 # Sustituir gene por gene_label en el ggplot
-ggplot(plot_df, aes(x = gene, y = weight, fill = direction)) +
+p3 <- ggplot(plot_df, aes(x = gene, y = weight, fill = direction)) +
   geom_col() + coord_flip() +
   labs(title = "Genes que dominan el patrón del componente sparse rank-1",
        x = "Gen", y = "Peso en u") +
@@ -400,12 +413,65 @@ print(annotated_cells[, c("ModelID", "CellLineName",
                           "OncotreeLineage", "OncotreePrimaryDisease",
                           "weight")])
 table(annotated_cells$OncotreeLineage)
+# ==============================================================
+# PANEL A — Genes con mayor peso (negativos y positivos)
+# ==============================================================
+gene_map_neg_plot <- head(gene_map_neg, 15)
+gene_map_neg_plot$direction <- "negative"
 
-# Barplot tejidos
-barplot(table(annotated_cells$OncotreeLineage),
-        col  = "steelblue",
-        main = "Distribución de tejidos en las líneas celulares con mayor peso",
-        xlab = "Tejido", ylab = "Número de líneas celulares", las = 2)
+gene_map_pos_plot <- head(gene_map_pos, 15)
+gene_map_pos_plot$direction <- "positive"
+
+plot_df <- rbind(gene_map_neg_plot, gene_map_pos_plot)
+plot_df$SYMBOL <- factor(plot_df$SYMBOL,
+                         levels = plot_df$SYMBOL[order(plot_df$weight)])
+
+p_a <- ggplot(plot_df, aes(x = SYMBOL, y = weight, fill = direction)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_manual(values = c("negative" = "#1a5276",
+                               "positive" = "#f0a070")) +
+  labs(title = "Genes con mayor peso en el componente 1",
+       x = NULL, y = "Peso en u") +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "none",
+        axis.text.y     = element_text(size = 9),
+        plot.title      = element_text(face = "bold", size = 11))
+
+# ==============================================================
+# PANEL B — Distribución de linajes
+# ==============================================================
+tissue_counts <- as.data.frame(table(annotated_cells$OncotreeLineage))
+colnames(tissue_counts) <- c("Lineage", "n")
+tissue_counts <- tissue_counts[tissue_counts$n > 0, ]
+tissue_counts <- tissue_counts[order(-tissue_counts$n), ]
+tissue_counts$Lineage <- factor(tissue_counts$Lineage,
+                                levels = tissue_counts$Lineage)
+
+p_b <- ggplot(tissue_counts, aes(x = Lineage, y = n)) +
+  geom_col(fill = "#1a5276") +
+  labs(title = "Distribución de linajes en líneas con mayor peso",
+       x = NULL, y = "Número de líneas celulares") +
+  theme_minimal(base_size = 11) +
+  theme(axis.text.x  = element_text(angle = 35, hjust = 1, size = 9),
+        plot.title   = element_text(face = "bold", size = 11)) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05)))
+
+# ==============================================================
+# COMBINAR Y GUARDAR
+# ==============================================================
+figura <- p_a / p_b +
+  plot_annotation(tag_levels = "a") &
+  theme(plot.tag = element_text(face = "bold", size = 12))
+
+ggsave("figura_hipotesis_hemato.png",
+       plot   = figura,
+       width  = 7,
+       height = 11,
+       dpi    = 300,
+       bg     = "white")
+
+
 
 # ==============================================================
 # DEFLACIÓN RECURSIVA
@@ -775,7 +841,7 @@ print(summary_table)
 
 u_1        <- components_list[[1]]$u
 top_genes_1 <- names(sort(abs(u_1[u_1 != 0]),
-                           decreasing = TRUE)[1:20])
+                          decreasing = TRUE)[1:20])
 
 suspension_cells <- metadata$ModelID[grepl("Suspension",
                                            metadata$GrowthPattern)]
@@ -867,88 +933,82 @@ for (lineage in names(cells_by_lineage)) {
   cat(sprintf("%-30s (n=%d): %.4f\n", lineage, length(cells_in_train), err))
 }
 
-### ¿Cuánto mejora solo el componente 1?###
-error_val_comp1 <- error_val
-
-u_k   <- components_list[[1]]$u
-A_val_asinh <- (1/gamma) * asinh(gamma * t(error_val_comp1))
-v_val <- as.vector(t(A_val_asinh) %*% u_k) / sum(u_k^2)
-v_val <- pmax(v_val, 0)
-error_val_comp1 <- error_val_comp1 - outer(v_val, u_k)
-
-# Global
-rmse_antes  <- sqrt(mean(error_val^2))
-rmse_comp1  <- sqrt(mean(error_val_comp1^2))
-cat("=== MEJORA SOLO COMPONENTE 1 ===\n")
-cat(sprintf("RMSE antes:          %.4f\n", rmse_antes))
-cat(sprintf("RMSE tras comp 1:    %.4f\n", rmse_comp1))
-cat(sprintf("Mejora global:       %.2f%%\n", 100*(rmse_antes - rmse_comp1)/rmse_antes))
-
-# Por tipo de cultivo
-rmse_susp_comp1 <- sqrt(mean(error_val_comp1[rownames(error_val_comp1) %in% suspension_cells, ]^2))
-rmse_adh_comp1  <- sqrt(mean(error_val_comp1[rownames(error_val_comp1) %in% adherent_cells, ]^2))
-
-cat(sprintf("Mejora suspensión:   %.2f%%\n", 100*(rmse_susp_antes - rmse_susp_comp1)/rmse_susp_antes))
-cat(sprintf("Mejora adherentes:   %.2f%%\n", 100*(rmse_adh_antes  - rmse_adh_comp1)/rmse_adh_antes))
-
-##Queremos observar si el error es equitativo dependiendo del tipo de cultivo##
-rmse_susp_antes  <- sqrt(mean(error_val[rownames(error_val) %in% suspension_cells, ]^2))
-rmse_susp_despues <- sqrt(mean(error_val_corrected[rownames(error_val_corrected) %in% suspension_cells, ]^2))
-cat("Mejora en suspensión:", 100*(rmse_susp_antes - rmse_susp_despues)/rmse_susp_antes, "%\n")
-
-rmse_adh_antes  <- sqrt(mean(error_val[rownames(error_val) %in% adherent_cells, ]^2))
-rmse_adh_despues <- sqrt(mean(error_val_corrected[
-  rownames(error_val_corrected) %in% adherent_cells, ]^2))
-cat("Mejora en adherentes:", 100*(rmse_adh_antes - rmse_adh_despues)/rmse_adh_antes, "%\n")
 
 
 
-####Pese a que vemos que hay una mejora clara gracias al median polish de un 10%
-## no creo que el resultado obtenido sea tan positivo como esperabamos ya que se debe
-#a un componente el cual la mayoria de sus celulas en el componente son hematologicas
-#por lo tanto lo esperado es que esten más celulas activas en ese componente que en otros
 
-## El problema de nuestro modelo es que lo queremos usar para entender como funcionan
-# las células hematológicas, estas sabemos que se cultivan en suspensión y de nuestro dataset
-# 97/653 son en suspensión lo que nos complica más la investigación
+#####
+library(ggplot2)
+library(patchwork)
+library(org.Hs.eg.db)
+library(clusterProfiler)
 
-##Además ahora al ver si realmente nuestro modelo falla más en hematológicas que en otras
-## nos damos cuentas que asi es 
-# ==============================================================
-# ERROR EN TUMORES HEMATOLÓGICOS VS SÓLIDOS
-# ==============================================================
+# Vectores de pesos
+u_named <- components_list[[1]]$u
+names(u_named) <- rownames(A)
 
-cat("\n=== ERROR EN HEMATOLÓGICOS VS SÓLIDOS ===\n")
+# Limpiar versiones ENSG si las hay
+names(u_named) <- sub("\\..*", "", names(u_named))
 
-metadata$TumorType <- ifelse(metadata$OncotreeLineage %in% c("Lymphoid", "Myeloid"),
-                             "Hematologic", "Solid")
+# Separar positivos y negativos antes de mapear
+u_neg <- sort(u_named[u_named < 0])
+u_pos <- sort(u_named[u_named > 0], decreasing = TRUE)
 
-cells_hematologic <- metadata$ModelID[metadata$TumorType == "Hematologic"]
-cells_solid       <- metadata$ModelID[metadata$TumorType == "Solid"]
+# Mapear negativos
+gene_map_neg <- bitr(names(head(u_neg, 20)),
+                     fromType = "ENSEMBL", toType = "SYMBOL",
+                     OrgDb = org.Hs.eg.db)
+gene_map_neg$weight <- u_neg[gene_map_neg$ENSEMBL]
+gene_map_neg <- gene_map_neg[order(gene_map_neg$weight), ]
+gene_map_neg$direction <- "negative"
 
-cells_hematologic_train <- intersect(cells_hematologic, rownames(error_train))
-cells_solid_train       <- intersect(cells_solid, rownames(error_train))
+# Mapear positivos
+gene_map_pos <- bitr(names(head(u_pos, 20)),
+                     fromType = "ENSEMBL", toType = "SYMBOL",
+                     OrgDb = org.Hs.eg.db)
+gene_map_pos$weight <- u_pos[gene_map_pos$ENSEMBL]
+gene_map_pos <- gene_map_pos[order(-gene_map_pos$weight), ]
+gene_map_pos$direction <- "positive"
 
-# Error medio por cell line (mejor que promediar toda la matriz de golpe)
-err_by_cell <- rowMeans(error_train, na.rm = TRUE)
+# Tomar top 15 de cada uno
+plot_df <- rbind(head(gene_map_neg, 15), head(gene_map_pos, 15))
+plot_df$SYMBOL <- factor(plot_df$SYMBOL, levels = plot_df$SYMBOL[order(plot_df$weight)])
 
-err_hema  <- err_by_cell[names(err_by_cell) %in% cells_hematologic_train]
-err_solid <- err_by_cell[names(err_by_cell) %in% cells_solid_train]
+# PANEL A
+p_a <- ggplot(plot_df, aes(x = SYMBOL, y = weight, fill = direction)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_manual(values = c("negative" = "#1a5276", "positive" = "#f0a070")) +
+  labs(title = "Genes con mayor peso en el componente 1",
+       x = NULL, y = "Peso en u") +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "none",
+        axis.text.y = element_text(size = 9),
+        plot.title = element_text(size = 11, face = "bold"))
 
-cat(sprintf("Hematologic (n=%d): %.4f\n", length(err_hema), mean(err_hema, na.rm = TRUE)))
-cat(sprintf("Solid       (n=%d): %.4f\n", length(err_solid), mean(err_solid, na.rm = TRUE)))
+# PANEL B
+v_named <- components_list[[1]]$v
+names(v_named) <- colnames(A)
+v_nonzero <- sort(v_named[v_named > 0], decreasing = TRUE)
+top_cells_df <- data.frame(ModelID = names(head(v_nonzero, 30)),
+                           weight = as.numeric(head(v_nonzero, 30)))
+annotated_cells <- merge(top_cells_df, metadata, by = "ModelID", all.x = TRUE)
 
-# Mejor usar también error absoluto
-abs_err_by_cell <- rowMeans(abs(error_train), na.rm = TRUE)
+tissue_counts <- as.data.frame(table(annotated_cells$OncotreeLineage))
+colnames(tissue_counts) <- c("Lineage", "n")
+tissue_counts <- tissue_counts[tissue_counts$n > 0, ]
+tissue_counts <- tissue_counts[order(-tissue_counts$n), ]
+tissue_counts$Lineage <- factor(tissue_counts$Lineage, levels = tissue_counts$Lineage)
 
-abs_err_hema  <- abs_err_by_cell[names(abs_err_by_cell) %in% cells_hematologic_train]
-abs_err_solid <- abs_err_by_cell[names(abs_err_by_cell) %in% cells_solid_train]
+p_b <- ggplot(tissue_counts, aes(x = Lineage, y = n)) +
+  geom_col(fill = "#1a5276") +
+  labs(title = "Distribución de tejidos en líneas con mayor peso",
+       x = NULL, y = "Número de líneas celulares") +
+  theme_minimal(base_size = 11) +
+  theme(axis.text.x = element_text(angle = 35, hjust = 1, size = 9),
+        plot.title = element_text(size = 11, face = "bold")) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05)))
 
-cat(sprintf("Abs error medio Hematologic: %.4f\n", mean(abs_err_hema, na.rm = TRUE)))
-cat(sprintf("Abs error medio Solid:       %.4f\n", mean(abs_err_solid, na.rm = TRUE)))
-
-# Test no paramétrico
-hema_vs_solid_test <- wilcox.test(abs_err_hema, abs_err_solid)
-
-cat(sprintf("Wilcoxon p-value: %.4g\n", hema_vs_solid_test$p.value))
+# COMBINAR
+p_a / p_b + plot_annotation(tag_levels = "a")
 
